@@ -1,11 +1,13 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.exceptions import HTTPException
+from typing import Optional
+import httpx
+from urllib.parse import unquote
 
 app = FastAPI(
-    title="Vercel + FastAPI",
-    description="Vercel + FastAPI",
+    title="Weather API - FastAPI",
+    description="A FastAPI weather service",
     version="1.0.0",
 )
 
@@ -43,6 +45,96 @@ def get_item(item_id: int):
     }
 
 
+@app.get("/api/weather/{city}")
+async def get_weather(
+    city: str,
+    units: Optional[str] = Query(None, description="Temperature units: 'metric' or 'imperial'")
+):
+    """
+    Get weather data for a specific city.
+    
+    Args:
+        city: The name of the city to get weather for
+        units: Temperature units ('metric' or 'imperial'). Defaults to 'metric'
+    
+    Returns:
+        Weather data including temperature, humidity, and wind speed
+    """
+    if not city:
+        raise HTTPException(status_code=400, detail="city is required")
+    
+    # Decode URL-encoded city name
+    decoded_city = unquote(city)
+    
+    # Normalize units
+    normalized_units = "imperial" if units == "imperial" else "metric"
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            # 1) Geocode city -> lat/lon
+            geo_response = await client.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={
+                    "name": decoded_city,
+                    "count": 1,
+                    "language": "en",
+                    "format": "json"
+                }
+            )
+            geo_response.raise_for_status()
+            geo_data = geo_response.json()
+            
+            if not geo_data.get("results"):
+                raise HTTPException(status_code=404, detail="city not found")
+            
+            result = geo_data["results"][0]
+            name = result["name"]
+            country = result["country"]
+            latitude = result["latitude"]
+            longitude = result["longitude"]
+            
+            # 2) Fetch current weather
+            forecast_params = {
+                "latitude": latitude,
+                "longitude": longitude,
+                "current": "temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m",
+                "timezone": "auto"
+            }
+            
+            if units == "imperial":
+                forecast_params["temperature_unit"] = "fahrenheit"
+                forecast_params["wind_speed_unit"] = "mph"
+            
+            forecast_response = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params=forecast_params
+            )
+            forecast_response.raise_for_status()
+            forecast_data = forecast_response.json()
+            
+            weather_data = {
+                "city": name,
+                "country": country,
+                "latitude": latitude,
+                "longitude": longitude,
+                "units": normalized_units,
+                "current": forecast_data["current"]
+            }
+            
+            return weather_data
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise HTTPException(status_code=404, detail="city not found")
+            raise HTTPException(status_code=500, detail="External API error")
+        except httpx.RequestError:
+            raise HTTPException(status_code=500, detail="Network error")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+
+
 @app.get("/", response_class=HTMLResponse)
 def read_root():
     return """
@@ -51,7 +143,7 @@ def read_root():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Vercel + FastAPI</title>
+        <title>Weather API - FastAPI</title>
         <link rel="icon" type="image/x-icon" href="/favicon.ico">
         <style>
             * {
@@ -280,6 +372,10 @@ def read_root():
                 color: #ffb86c;
             }
 
+            .comment {
+                color: #6272a4;
+            }
+
             @media (max-width: 768px) {
                 nav {
                     padding: 1rem;
@@ -312,36 +408,46 @@ def read_root():
     <body>
         <header>
             <nav>
-                <a href="/" class="logo">Vercel + FastAPI</a>
+                <a href="/" class="logo">Weather API - FastAPI</a>
                 <div class="nav-links">
                     <a href="/docs">API Docs</a>
-                    <a href="/api/data">API</a>
+                    <a href="/api/weather/London">Weather</a>
                 </div>
             </nav>
         </header>
         <main>
             <div class="hero">
-                <h1>Vercel + FastAPI</h1>
+                <h1>Weather API - FastAPI</h1>
+                <p class="subtitle">Get real-time weather data for any city worldwide with our powerful FastAPI service</p>
                 <div class="hero-code">
                     <pre><code><span class="keyword">from</span> <span class="module">fastapi</span> <span class="keyword">import</span> <span class="class">FastAPI</span>
+<span class="keyword">import</span> <span class="module">httpx</span>
 
 <span class="variable">app</span> = <span class="class">FastAPI</span>()
 
-<span class="decorator">@app.get</span>(<span class="string">"/"</span>)
-<span class="keyword">def</span> <span class="function">read_root</span>():
-    <span class="keyword">return</span> {<span class="string">"Python"</span>: <span class="string">"on Vercel"</span>}</code></pre>
+<span class="decorator">@app.get</span>(<span class="string">"/api/weather/{city}"</span>)
+<span class="keyword">async</span> <span class="keyword">def</span> <span class="function">get_weather</span>(<span class="variable">city</span>: <span class="class">str</span>):
+    <span class="keyword">async</span> <span class="keyword">with</span> <span class="class">httpx</span>.<span class="class">AsyncClient</span>() <span class="keyword">as</span> <span class="variable">client</span>:
+        <span class="comment"># Geocode city → Get weather data</span>
+        <span class="keyword">return</span> <span class="variable">weather_data</span></code></pre>
                 </div>
             </div>
 
             <div class="cards">
                 <div class="card">
-                    <h3>Interactive API Docs</h3>
+                    <h3>🌤️ Weather API</h3>
+                    <p>Get real-time weather data for any city worldwide. Supports both metric and imperial units with comprehensive weather information.</p>
+                    <a href="/api/weather/London">Try London →</a>
+                </div>
+
+                <div class="card">
+                    <h3>📚 Interactive API Docs</h3>
                     <p>Explore this API's endpoints with the interactive Swagger UI. Test requests and view response schemas in real-time.</p>
                     <a href="/docs">Open Swagger UI →</a>
                 </div>
 
                 <div class="card">
-                    <h3>Sample Data</h3>
+                    <h3>🔧 Sample Data</h3>
                     <p>Access sample JSON data through our REST API. Perfect for testing and development purposes.</p>
                     <a href="/api/data">Get Data →</a>
                 </div>
